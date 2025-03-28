@@ -27,7 +27,7 @@ cat status.md
 3. Review the project description
 
 # Open the project description document
-cat docs/project-description.md
+cat docs/dev-plan/project-description.md
 
 4. Check recent changes (if Git is initialized)
 

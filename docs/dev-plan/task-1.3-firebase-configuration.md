@@ -14,7 +14,7 @@ Previous Decision: Use Firebase for authentication, database, and storage
 
 1. Review the project description document, particularly the Technical Stack section:
    ```bash
-   cat docs/project-description.md
+   cat @/project-description.md
    ```
 
 2. Check the current project status:
