@@ -1,59 +1,66 @@
 /**
  * @file useLevels.ts
  * @description Hook for accessing level data and user progress
- * @dependencies lib/data/levels, lib/data/user-progress
+ * @dependencies lib/data/levels, hooks/useProgress
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Level, LevelStatus, UserProgress } from '@/types';
-import { getLevels, getLevelById, getLevelStatus } from '@/lib/data/levels';
-import { getUserProgress, isLevelCompleted, isLevelAvailable } from '@/lib/data/user-progress';
-import { useAuth } from './useAuth';
+import { Level, LevelStatus } from '@/types';
+import { getLevels, getLevelById } from '@/lib/data/levels';
+import { useProgress } from './useProgress';
 
 /**
  * Hook for accessing and managing level data
  */
 export function useLevels() {
-  const { user } = useAuth();
+  const { 
+    progress, 
+    isLoading: progressLoading,
+    isLevelCompleted 
+  } = useProgress();
+  
   const [levels, setLevels] = useState<Level[]>([]);
-  const [userProgress, setUserProgress] = useState<UserProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  // Fetch levels and user progress
+  // Fetch levels
   useEffect(() => {
     try {
       // Get all levels
       const allLevels = getLevels();
       setLevels(allLevels);
       
-      // Get user progress if user is authenticated
-      if (user) {
-        const progress = getUserProgress(user.id);
-        setUserProgress(progress);
+      // If progress is still loading, we'll wait
+      if (!progressLoading) {
+        setLoading(false);
       }
-      
-      setLoading(false);
     } catch (err) {
       console.error('Error fetching levels:', err);
       setError(err instanceof Error ? err : new Error('Failed to fetch levels'));
       setLoading(false);
     }
-  }, [user]);
+  }, [progressLoading]);
+
+  // Update loading state when progress finishes loading
+  useEffect(() => {
+    if (!progressLoading && loading) {
+      setLoading(false);
+    }
+  }, [progressLoading, loading]);
 
   /**
    * Get status for a specific level
    */
-  const getLevelStatusForUser = useCallback((levelId: string): LevelStatus => {
-    if (!userProgress) return LevelStatus.LOCKED;
+  const getLevelStatus = useCallback((levelId: string): LevelStatus => {
+    if (!progress) return LevelStatus.LOCKED;
     
     // If level is completed, return completed status
-    if (isLevelCompleted(levelId, userProgress)) {
+    if (isLevelCompleted(levelId)) {
       return LevelStatus.COMPLETED;
     }
     
     // If level is current level, it's available
-    if (userProgress.currentLevel === levelId) {
+    if (progress.currentLevel === levelId) {
       return LevelStatus.AVAILABLE;
     }
     
@@ -68,28 +75,12 @@ export function useLevels() {
     
     // Check if previous level is completed
     const previousLevelId = `level-${level.order - 1}`;
-    if (isLevelCompleted(previousLevelId, userProgress)) {
+    if (isLevelCompleted(previousLevelId)) {
       return LevelStatus.AVAILABLE;
     }
     
     return LevelStatus.LOCKED;
-  }, [userProgress]);
-
-  /**
-   * Check if a level is completed
-   */
-  const isCompleted = useCallback((levelId: string): boolean => {
-    if (!userProgress) return false;
-    return isLevelCompleted(levelId, userProgress);
-  }, [userProgress]);
-
-  /**
-   * Check if a level is available
-   */
-  const isAvailable = useCallback((levelId: string): boolean => {
-    if (!userProgress) return levelId === 'level-1'; // First level is always available
-    return isLevelAvailable(levelId, userProgress);
-  }, [userProgress]);
+  }, [progress, isLevelCompleted]);
 
   /**
    * Get all levels with their status
@@ -97,18 +88,17 @@ export function useLevels() {
   const getLevelsWithStatus = useCallback((): (Level & { status: LevelStatus })[] => {
     return levels.map(level => ({
       ...level,
-      status: getLevelStatusForUser(level.id)
+      status: getLevelStatus(level.id)
     }));
-  }, [levels, getLevelStatusForUser]);
+  }, [levels, getLevelStatus]);
 
   return {
     levels,
-    userProgress,
-    loading,
+    progress,
+    loading: loading || progressLoading,
     error,
-    getLevelStatusForUser,
-    isCompleted,
-    isAvailable,
+    getLevelStatus,
+    isLevelCompleted,
     getLevelsWithStatus
   };
 } 

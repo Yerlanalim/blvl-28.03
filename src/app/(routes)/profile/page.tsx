@@ -7,22 +7,35 @@
 'use client';
 
 import { useProfile } from '@/hooks/useProfile';
+import { useProgress } from '@/hooks/useProgress';
 import { ProfileCard } from '@/components/features/profile/ProfileCard';
-import { SkillProgressBar } from '@/components/features/profile/SkillProgressBar';
 import { BadgeDisplay } from '@/components/features/profile/BadgeDisplay';
 import { ProgressOverview } from '@/components/features/profile/ProgressOverview';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { SkillProgressSection } from '@/components/features/profile/SkillProgressSection';
+import { SkillRecommendations } from '@/components/features/profile/SkillRecommendations';
 
 export default function ProfilePage() {
   const {
     user,
-    loading,
-    error,
+    loading: profileLoading,
+    error: profileError,
     getFormattedSkills,
     getOverallProgress,
     completedLevelsCount,
     badges
   } = useProfile();
+
+  const {
+    progress,
+    isLoading: progressLoading,
+    error: progressError,
+    getFormattedSkillProgress,
+    getSkillRecommendationsForUser
+  } = useProgress();
+
+  const loading = profileLoading || progressLoading;
+  const error = profileError || progressError;
 
   if (loading) {
     return (
@@ -49,7 +62,6 @@ export default function ProfilePage() {
     );
   }
 
-  const skills = getFormattedSkills();
   const overallProgress = getOverallProgress();
 
   return (
@@ -65,20 +77,14 @@ export default function ProfilePage() {
       <ProfileCard user={user} businessInfo={user.businessInfo} />
 
       {/* Skills */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Навыки</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {skills.map((skill) => (
-            <SkillProgressBar
-              key={skill.type}
-              name={skill.name}
-              progress={skill.progress}
-            />
-          ))}
-        </CardContent>
-      </Card>
+      <SkillProgressSection
+        skills={getFormattedSkillProgress()}
+      />
+
+      {/* Skill Recommendations */}
+      <SkillRecommendations
+        recommendations={getSkillRecommendationsForUser()}
+      />
 
       {/* Progress */}
       <ProgressOverview

@@ -1,25 +1,34 @@
 /**
  * @file useLevel.ts
- * @description Hook for accessing and managing individual level data and user progress
- * @dependencies hooks/useAuth, lib/data/levels, lib/data/user-progress
+ * @description Hook for accessing individual level data and progress
+ * @dependencies hooks/useProgress, lib/data/levels
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Level, LevelStatus, VideoProgress, Test } from '@/types';
-import { getLevelById } from '@/lib/data/levels';
-import { 
-  getUserProgress, 
-  isVideoWatched, 
-  isTestCompleted, 
-  isArtifactDownloaded 
-} from '@/lib/data/user-progress';
 import { useAuth } from './useAuth';
+import { useProgress } from './useProgress';
+import { Level, VideoProgress, LevelStatus } from '@/types';
+import { getLevelById } from '@/lib/data/levels';
 
 /**
  * Hook for accessing and managing individual level data
  */
 export function useLevel(levelId: string) {
   const { user } = useAuth();
+  const { 
+    progress, 
+    isLoading: progressLoading, 
+    isUpdating,
+    trackVideoWatched,
+    trackTestCompleted,
+    trackArtifactDownloaded,
+    trackLevelCompleted,
+    isVideoWatched,
+    isTestCompleted,
+    isArtifactDownloaded,
+    isLevelCompleted
+  } = useProgress();
+  
   const [level, setLevel] = useState<Level | null>(null);
   const [levelStatus, setLevelStatus] = useState<LevelStatus>(LevelStatus.LOCKED);
   const [videoProgress, setVideoProgress] = useState<Record<string, VideoProgress>>({});
@@ -28,7 +37,7 @@ export function useLevel(levelId: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  // Fetch level data and progress
+  // Fetch level data and determine status
   useEffect(() => {
     if (!levelId) {
       setError(new Error('Level ID is required'));
@@ -47,45 +56,49 @@ export function useLevel(levelId: string) {
       
       setLevel(levelData);
       
-      // Get user progress
-      if (user) {
-        const progress = getUserProgress(user.id);
-        
-        // Determine level status
-        if (progress.completedLevels.includes(levelId)) {
-          setLevelStatus(LevelStatus.COMPLETED);
-        } else if (progress.currentLevel === levelId || levelData.order === 1) {
-          setLevelStatus(LevelStatus.AVAILABLE);
-        } else {
-          setLevelStatus(LevelStatus.LOCKED);
-        }
-        
-        // Initialize video progress
-        const videoProgressMap: Record<string, VideoProgress> = {};
-        levelData.videos.forEach(video => {
-          const isWatched = isVideoWatched(video.id, progress);
-          videoProgressMap[video.id] = {
-            videoId: video.id,
-            watched: isWatched,
-            position: isWatched ? video.duration : 0
-          };
-        });
-        setVideoProgress(videoProgressMap);
-        
-        // Initialize test progress
-        const testProgressMap: Record<string, boolean> = {};
-        levelData.tests.forEach(test => {
-          testProgressMap[test.id] = isTestCompleted(test.id, progress);
-        });
-        setTestProgress(testProgressMap);
-        
-        // Initialize artifact download status
-        const artifactDownloadMap: Record<string, boolean> = {};
-        levelData.artifacts.forEach(artifact => {
-          artifactDownloadMap[artifact.id] = isArtifactDownloaded(artifact.id, progress);
-        });
-        setArtifactDownloaded(artifactDownloadMap);
+      // Wait for progress to load
+      if (progressLoading) {
+        return;
       }
+      
+      // Determine level status
+      if (isLevelCompleted(levelId)) {
+        setLevelStatus(LevelStatus.COMPLETED);
+      } else if (
+        progress?.currentLevel === levelId || 
+        levelData.order === 1 ||
+        (levelData.order > 1 && isLevelCompleted(`level-${levelData.order - 1}`))
+      ) {
+        setLevelStatus(LevelStatus.AVAILABLE);
+      } else {
+        setLevelStatus(LevelStatus.LOCKED);
+      }
+      
+      // Initialize video progress
+      const videoProgressMap: Record<string, VideoProgress> = {};
+      levelData.videos.forEach(video => {
+        const watched = isVideoWatched(video.id);
+        videoProgressMap[video.id] = {
+          videoId: video.id,
+          watched,
+          position: watched ? video.duration : 0
+        };
+      });
+      setVideoProgress(videoProgressMap);
+      
+      // Initialize test progress
+      const testProgressMap: Record<string, boolean> = {};
+      levelData.tests.forEach(test => {
+        testProgressMap[test.id] = isTestCompleted(test.id);
+      });
+      setTestProgress(testProgressMap);
+      
+      // Initialize artifact download status
+      const artifactDownloadMap: Record<string, boolean> = {};
+      levelData.artifacts.forEach(artifact => {
+        artifactDownloadMap[artifact.id] = isArtifactDownloaded(artifact.id);
+      });
+      setArtifactDownloaded(artifactDownloadMap);
       
       setLoading(false);
     } catch (err) {
@@ -93,13 +106,24 @@ export function useLevel(levelId: string) {
       setError(err instanceof Error ? err : new Error('Failed to fetch level data'));
       setLoading(false);
     }
-  }, [levelId, user]);
+  }, [
+    levelId, 
+    progress, 
+    progressLoading, 
+    isLevelCompleted, 
+    isVideoWatched, 
+    isTestCompleted, 
+    isArtifactDownloaded
+  ]);
 
   /**
    * Mark a video as watched
    */
-  const markVideoWatched = useCallback((videoId: string) => {
-    if (!user || !level) return;
+  const markVideoWatched = useCallback(async (videoId: string) => {
+    if (!videoId || !level) return;
+    
+    // Mark video as watched in progress system
+    await trackVideoWatched(videoId, level.videos.find(v => v.id === videoId)?.duration || 0);
     
     // Update local state
     setVideoProgress(prev => ({
@@ -110,16 +134,13 @@ export function useLevel(levelId: string) {
         position: level.videos.find(v => v.id === videoId)?.duration || 0
       }
     }));
-    
-    // In a real app, you would update the backend here
-    console.log(`Marking video ${videoId} as watched for user ${user.id}`);
-  }, [user, level]);
+  }, [level, trackVideoWatched]);
 
   /**
-   * Update a video's position
+   * Update video position
    */
-  const updateVideoPosition = useCallback((videoId: string, position: number) => {
-    if (!user) return;
+  const updateVideoPosition = useCallback(async (videoId: string, position: number) => {
+    if (!videoId || !level) return;
     
     // Update local state
     setVideoProgress(prev => ({
@@ -130,47 +151,81 @@ export function useLevel(levelId: string) {
       }
     }));
     
-    // In a real app, you would update the backend here
-    console.log(`Updating video ${videoId} position to ${position}s for user ${user.id}`);
-  }, [user]);
+    // If position is >= 90% of duration, mark as watched
+    const video = level.videos.find(v => v.id === videoId);
+    if (video && position >= video.duration * 0.9 && !videoProgress[videoId]?.watched) {
+      await markVideoWatched(videoId);
+    }
+  }, [level, videoProgress, markVideoWatched]);
 
   /**
    * Mark a test as completed
    */
-  const markTestCompleted = useCallback((testId: string, score: number) => {
-    if (!user) return;
+  const markTestCompleted = useCallback(async (testId: string, score: number) => {
+    if (!testId || !level) return;
+    
+    // Get the test
+    const test = level.tests.find(t => t.id === testId);
+    if (!test) return;
+    
+    // Create dummy answers for simplicity (in a real app, we'd use actual answers)
+    const answers = test.questions.map((q, index) => ({
+      questionId: q.id,
+      answeredOption: q.correctAnswer, // Assume correct answers for simplicity
+      isCorrect: true
+    }));
+    
+    // Mark test as completed in progress system
+    await trackTestCompleted(testId, score, answers);
     
     // Update local state
     setTestProgress(prev => ({
       ...prev,
       [testId]: true
     }));
-    
-    // In a real app, you would update the backend here
-    console.log(`Marking test ${testId} as completed with score ${score} for user ${user.id}`);
-  }, [user]);
+  }, [level, trackTestCompleted]);
 
   /**
    * Mark an artifact as downloaded
    */
-  const markArtifactDownloaded = useCallback((artifactId: string) => {
-    if (!user) return;
+  const markArtifactDownloaded = useCallback(async (artifactId: string) => {
+    if (!artifactId || !level) return;
+    
+    // Mark artifact as downloaded in progress system
+    await trackArtifactDownloaded(artifactId);
     
     // Update local state
     setArtifactDownloaded(prev => ({
       ...prev,
       [artifactId]: true
     }));
-    
-    // In a real app, you would update the backend here
-    console.log(`Marking artifact ${artifactId} as downloaded for user ${user.id}`);
-  }, [user]);
+  }, [level, trackArtifactDownloaded]);
 
   /**
-   * Check if all videos are watched, all tests completed, and all artifacts downloaded
+   * Complete the level
+   */
+  const completeLevel = useCallback(async () => {
+    if (!level || !user) return false;
+    
+    // Track level completion in progress system
+    const result = await trackLevelCompleted(level.id, level);
+    
+    // Update local state if successful
+    if (result) {
+      setLevelStatus(LevelStatus.COMPLETED);
+    }
+    
+    return result;
+  }, [level, user, trackLevelCompleted]);
+
+  /**
+   * Check if level can be completed
    */
   const canCompleteLevel = useCallback(() => {
     if (!level) return false;
+    
+    // Check if already completed
+    if (levelStatus === LevelStatus.COMPLETED) return false;
     
     // Check if all videos are watched
     const allVideosWatched = level.videos.every(video => 
@@ -188,22 +243,7 @@ export function useLevel(levelId: string) {
     );
     
     return allVideosWatched && allTestsCompleted && allArtifactsDownloaded;
-  }, [level, videoProgress, testProgress, artifactDownloaded]);
-
-  /**
-   * Complete the level
-   */
-  const completeLevel = useCallback(() => {
-    if (!user || !level || !canCompleteLevel()) return false;
-    
-    // Update level status
-    setLevelStatus(LevelStatus.COMPLETED);
-    
-    // In a real app, you would update the backend here
-    console.log(`Marking level ${level.id} as completed for user ${user.id}`);
-    
-    return true;
-  }, [user, level, canCompleteLevel]);
+  }, [level, levelStatus, videoProgress, testProgress, artifactDownloaded]);
 
   return {
     level,
@@ -211,7 +251,8 @@ export function useLevel(levelId: string) {
     videoProgress,
     testProgress,
     artifactDownloaded,
-    loading,
+    loading: loading || progressLoading,
+    isUpdating,
     error,
     markVideoWatched,
     updateVideoPosition,

@@ -1,5 +1,3 @@
-начать с этой, удалить эту надпись  
-
 # Task 3.3: Implement Settings Page
 
 ## Task Details

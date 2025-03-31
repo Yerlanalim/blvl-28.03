@@ -1,14 +1,13 @@
 /**
  * @file useArtifacts.ts
  * @description Hook for accessing artifact data and user interactions
- * @dependencies lib/data/levels, lib/data/user-progress
+ * @dependencies lib/data/levels, hooks/useProgress
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { useAuth } from './useAuth';
 import { Artifact, ArtifactFileType, LevelArtifact } from '@/types';
 import { getLevels } from '@/lib/data/levels';
-import { getUserProgress, isArtifactDownloaded } from '@/lib/data/user-progress';
+import { useProgress } from './useProgress';
 
 /**
  * Combined artifact information with level details and download status
@@ -24,9 +23,13 @@ export interface ArtifactWithMeta extends Artifact {
  * Hook for accessing and managing artifact data
  */
 export function useArtifacts() {
-  const { user } = useAuth();
+  const { 
+    isLoading: progressLoading,
+    isArtifactDownloaded,
+    trackArtifactDownloaded
+  } = useProgress();
+  
   const [artifacts, setArtifacts] = useState<ArtifactWithMeta[]>([]);
-  const [downloadedArtifacts, setDownloadedArtifacts] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -60,33 +63,42 @@ export function useArtifacts() {
       // Sort artifacts by level order
       allArtifacts.sort((a, b) => a.levelOrder - b.levelOrder);
       
-      // Get user progress for download status
-      if (user) {
-        const progress = getUserProgress(user.id);
-        
+      // If progress is still loading, we'll wait before setting download status
+      if (!progressLoading) {
         // Update download status
         allArtifacts.forEach(artifact => {
-          artifact.isDownloaded = isArtifactDownloaded(artifact.id, progress);
+          artifact.isDownloaded = isArtifactDownloaded(artifact.id);
         });
         
-        // Save downloaded artifacts list
-        setDownloadedArtifacts(progress.downloadedArtifacts);
+        setLoading(false);
       }
       
       setArtifacts(allArtifacts);
-      setLoading(false);
     } catch (err) {
       console.error('Error loading artifacts:', err);
       setError(err instanceof Error ? err : new Error('Failed to load artifacts'));
       setLoading(false);
     }
-  }, [user]);
+  }, [progressLoading, isArtifactDownloaded]);
+
+  // Update download status when progress finishes loading
+  useEffect(() => {
+    if (!progressLoading && artifacts.length > 0 && loading) {
+      setArtifacts(prev => prev.map(artifact => ({
+        ...artifact,
+        isDownloaded: isArtifactDownloaded(artifact.id)
+      })));
+      
+      setLoading(false);
+    }
+  }, [progressLoading, artifacts.length, loading, isArtifactDownloaded]);
 
   /**
    * Mark an artifact as downloaded
    */
-  const markArtifactDownloaded = useCallback((artifactId: string) => {
-    if (!artifactId || !user) return;
+  const markArtifactDownloaded = useCallback(async (artifactId: string) => {
+    // Track artifact download
+    await trackArtifactDownloaded(artifactId);
     
     // Update local state
     setArtifacts(prev => prev.map(artifact => 
@@ -94,14 +106,7 @@ export function useArtifacts() {
         ? { ...artifact, isDownloaded: true } 
         : artifact
     ));
-    
-    setDownloadedArtifacts(prev => 
-      prev.includes(artifactId) ? prev : [...prev, artifactId]
-    );
-    
-    // In a real app, we would update this in Firestore
-    console.log(`Artifact ${artifactId} marked as downloaded`);
-  }, [user]);
+  }, [trackArtifactDownloaded]);
 
   /**
    * Filter artifacts by type
@@ -138,23 +143,15 @@ export function useArtifacts() {
     return artifacts.filter(a => a.isDownloaded);
   }, [artifacts]);
 
-  /**
-   * Check if an artifact is downloaded
-   */
-  const isDownloaded = useCallback((artifactId: string) => {
-    return downloadedArtifacts.includes(artifactId);
-  }, [downloadedArtifacts]);
-
   return {
     artifacts,
-    downloadedArtifacts,
-    loading,
+    loading: loading || progressLoading,
     error,
     markArtifactDownloaded,
     filterByType,
     searchArtifacts,
     getArtifactsByLevel,
     getDownloadedArtifacts,
-    isDownloaded
+    isDownloaded: isArtifactDownloaded
   };
 } 
