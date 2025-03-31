@@ -11,7 +11,10 @@ import {
   setDoc, 
   arrayUnion, 
   increment, 
-  serverTimestamp 
+  serverTimestamp,
+  writeBatch,
+  FieldValue,
+  deleteDoc
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { 
@@ -23,64 +26,81 @@ import {
 import { Level } from '@/types';
 import { calculateSkillProgress } from './skill-service';
 
-// In a real app, these operations would interact with Firestore
-// For the MVP, we'll use localStorage to simulate persistence
-
+// Storage key for any fallback localStorage operations
 const STORAGE_KEY = 'bizlevel_user_progress';
 
 /**
  * Initialize user progress
  * 
- * Creates a new progress record for a user
+ * Creates a new progress record for a user in Firestore
+ * 
+ * @param userId - The user ID to create progress for
+ * @returns The initialized user progress
+ * @throws Error if the initialization fails
  */
 export async function initializeUserProgress(userId: string): Promise<UserProgress> {
-  // Create initial progress object
-  const initialProgress: UserProgress = {
-    userId,
-    completedLevels: [],
-    currentLevel: 'level-1', // Start with the first level
-    skillProgress: {
-      [SkillType.PERSONAL_SKILLS]: 0,
-      [SkillType.MANAGEMENT]: 0,
-      [SkillType.NETWORKING]: 0,
-      [SkillType.CLIENT_WORK]: 0,
-      [SkillType.FINANCE]: 0,
-      [SkillType.LEGAL]: 0
-    },
-    badges: [],
-    downloadedArtifacts: [],
-    watchedVideos: [],
-    completedTests: [],
-    lastUpdated: new Date().toISOString()
-  };
-  
-  // In a real app, we'd save to Firestore:
-  // await setDoc(doc(db, 'userProgress', userId), initialProgress);
-  
-  // For MVP, we'll use localStorage
-  localStorage.setItem(STORAGE_KEY + '_' + userId, JSON.stringify(initialProgress));
-  
-  return initialProgress;
+  try {
+    // Create initial progress object with data for Firestore
+    const initialProgressData = {
+      userId,
+      completedLevels: [],
+      currentLevel: 'level-1', // Start with the first level
+      skillProgress: {
+        [SkillType.PERSONAL_SKILLS]: 0,
+        [SkillType.MANAGEMENT]: 0,
+        [SkillType.NETWORKING]: 0,
+        [SkillType.CLIENT_WORK]: 0,
+        [SkillType.FINANCE]: 0,
+        [SkillType.LEGAL]: 0
+      },
+      badges: [],
+      downloadedArtifacts: [],
+      watchedVideos: [],
+      completedTests: [],
+      lastUpdated: serverTimestamp()
+    };
+    
+    // Save to Firestore
+    await setDoc(doc(db, 'userProgress', userId), initialProgressData);
+    
+    // Return the progress with proper Date for lastUpdated for the client
+    const initialProgress: UserProgress = {
+      ...initialProgressData,
+      lastUpdated: new Date().toISOString()
+    };
+    
+    return initialProgress;
+  } catch (error) {
+    console.error('Error initializing user progress:', error);
+    throw error;
+  }
 }
 
 /**
  * Get user progress
  * 
- * Fetches the current progress for a user
+ * Fetches the current progress for a user from Firestore
+ * 
+ * @param userId - The user ID to get progress for
+ * @returns The user's progress or null if not found
+ * @throws Error if fetching fails
  */
 export async function getUserProgress(userId: string): Promise<UserProgress | null> {
   try {
-    // In a real app, we'd fetch from Firestore:
-    // const docSnap = await getDoc(doc(db, 'userProgress', userId));
-    // if (docSnap.exists()) {
-    //   return docSnap.data() as UserProgress;
-    // }
+    // Fetch from Firestore
+    const docSnap = await getDoc(doc(db, 'userProgress', userId));
     
-    // For MVP, we'll use localStorage
-    const stored = localStorage.getItem(STORAGE_KEY + '_' + userId);
-    
-    if (stored) {
-      return JSON.parse(stored) as UserProgress;
+    if (docSnap.exists()) {
+      // Transform any Firestore timestamps to strings for the client
+      const data = docSnap.data();
+      return {
+        ...data,
+        lastUpdated: data.lastUpdated instanceof Date 
+          ? data.lastUpdated.toISOString() 
+          : typeof data.lastUpdated === 'object' && data.lastUpdated !== null
+            ? new Date(data.lastUpdated.seconds * 1000).toISOString()
+            : data.lastUpdated
+      } as UserProgress;
     }
     
     // If no progress exists, initialize it
@@ -94,7 +114,12 @@ export async function getUserProgress(userId: string): Promise<UserProgress | nu
 /**
  * Mark video as watched
  * 
- * Updates the user's progress to indicate a video has been watched
+ * Updates the user's progress in Firestore to indicate a video has been watched
+ * 
+ * @param userId - The user ID
+ * @param videoId - The video ID that was watched
+ * @param position - The position in the video (seconds)
+ * @throws Error if the update fails
  */
 export async function markVideoWatched(
   userId: string, 
@@ -102,7 +127,7 @@ export async function markVideoWatched(
   position: number
 ): Promise<void> {
   try {
-    // Get current progress
+    // Get current progress to check if already watched
     const progress = await getUserProgress(userId);
     if (!progress) return;
     
@@ -111,38 +136,11 @@ export async function markVideoWatched(
       return; // Already watched, no need to update
     }
     
-    // Update progress
-    const updatedProgress = {
-      ...progress,
-      watchedVideos: [...progress.watchedVideos, videoId],
-      lastUpdated: new Date().toISOString()
-    };
-    
-    // In a real app, we'd update Firestore:
-    // await updateDoc(doc(db, 'userProgress', userId), {
-    //   watchedVideos: arrayUnion(videoId),
-    //   lastUpdated: serverTimestamp()
-    // });
-    
-    // For MVP, we'll use localStorage
-    localStorage.setItem(STORAGE_KEY + '_' + userId, JSON.stringify(updatedProgress));
-    
-    // Log video progress separately
-    const videoProgress: VideoProgress = {
-      videoId,
-      watched: true,
-      position,
-      completedAt: new Date().toISOString()
-    };
-    
-    // In a real app, we'd store this in a subcollection:
-    // await setDoc(doc(db, `userProgress/${userId}/videoProgress`, videoId), videoProgress);
-    
-    // For MVP, we'll use localStorage
-    localStorage.setItem(
-      STORAGE_KEY + '_' + userId + '_video_' + videoId, 
-      JSON.stringify(videoProgress)
-    );
+    // Update Firestore document
+    await updateDoc(doc(db, 'userProgress', userId), {
+      watchedVideos: arrayUnion(videoId),
+      lastUpdated: serverTimestamp()
+    });
   } catch (error) {
     console.error('Error marking video as watched:', error);
     throw error;
@@ -152,7 +150,13 @@ export async function markVideoWatched(
 /**
  * Mark test as completed
  * 
- * Updates the user's progress to indicate a test has been completed
+ * Updates the user's progress in Firestore to indicate a test has been completed
+ * 
+ * @param userId - The user ID
+ * @param testId - The test ID that was completed
+ * @param score - The test score
+ * @param answers - Array of user answers with correctness info
+ * @throws Error if the update fails
  */
 export async function markTestCompleted(
   userId: string, 
@@ -161,7 +165,7 @@ export async function markTestCompleted(
   answers: Array<{ questionId: string; answeredOption: number; isCorrect: boolean }>
 ): Promise<void> {
   try {
-    // Get current progress
+    // Get current progress to check if already completed
     const progress = await getUserProgress(userId);
     if (!progress) return;
     
@@ -170,39 +174,11 @@ export async function markTestCompleted(
       return; // Already completed, no need to update
     }
     
-    // Update progress
-    const updatedProgress = {
-      ...progress,
-      completedTests: [...progress.completedTests, testId],
-      lastUpdated: new Date().toISOString()
-    };
-    
-    // In a real app, we'd update Firestore:
-    // await updateDoc(doc(db, 'userProgress', userId), {
-    //   completedTests: arrayUnion(testId),
-    //   lastUpdated: serverTimestamp()
-    // });
-    
-    // For MVP, we'll use localStorage
-    localStorage.setItem(STORAGE_KEY + '_' + userId, JSON.stringify(updatedProgress));
-    
-    // Log test progress separately
-    const testProgress: TestProgress = {
-      testId,
-      completed: true,
-      score,
-      answers,
-      completedAt: new Date().toISOString()
-    };
-    
-    // In a real app, we'd store this in a subcollection:
-    // await setDoc(doc(db, `userProgress/${userId}/testProgress`, testId), testProgress);
-    
-    // For MVP, we'll use localStorage
-    localStorage.setItem(
-      STORAGE_KEY + '_' + userId + '_test_' + testId, 
-      JSON.stringify(testProgress)
-    );
+    // Update Firestore document
+    await updateDoc(doc(db, 'userProgress', userId), {
+      completedTests: arrayUnion(testId),
+      lastUpdated: serverTimestamp()
+    });
   } catch (error) {
     console.error('Error marking test as completed:', error);
     throw error;
@@ -212,14 +188,18 @@ export async function markTestCompleted(
 /**
  * Mark artifact as downloaded
  * 
- * Updates the user's progress to indicate an artifact has been downloaded
+ * Updates the user's progress and artifact download count in Firestore
+ * 
+ * @param userId - The user ID
+ * @param artifactId - The artifact ID that was downloaded
+ * @throws Error if the update fails
  */
 export async function markArtifactDownloaded(
   userId: string, 
   artifactId: string
 ): Promise<void> {
   try {
-    // Get current progress
+    // Get current progress to check if already downloaded
     const progress = await getUserProgress(userId);
     if (!progress) return;
     
@@ -228,26 +208,24 @@ export async function markArtifactDownloaded(
       return; // Already downloaded, no need to update
     }
     
-    // Update progress
-    const updatedProgress = {
-      ...progress,
-      downloadedArtifacts: [...progress.downloadedArtifacts, artifactId],
-      lastUpdated: new Date().toISOString()
-    };
+    // Use a batch write to update both the user progress and artifact document
+    const batch = writeBatch(db);
     
-    // In a real app, we'd update Firestore:
-    // await updateDoc(doc(db, 'userProgress', userId), {
-    //   downloadedArtifacts: arrayUnion(artifactId),
-    //   lastUpdated: serverTimestamp()
-    // });
+    // Update user progress
+    const userProgressRef = doc(db, 'userProgress', userId);
+    batch.update(userProgressRef, {
+      downloadedArtifacts: arrayUnion(artifactId),
+      lastUpdated: serverTimestamp()
+    });
     
-    // For MVP, we'll use localStorage
-    localStorage.setItem(STORAGE_KEY + '_' + userId, JSON.stringify(updatedProgress));
+    // Update artifact download count
+    const artifactRef = doc(db, 'artifacts', artifactId);
+    batch.update(artifactRef, {
+      downloadCount: increment(1)
+    });
     
-    // Also update artifact download count (in a real app)
-    // await updateDoc(doc(db, 'artifacts', artifactId), {
-    //   downloadCount: increment(1)
-    // });
+    // Commit the batch
+    await batch.commit();
   } catch (error) {
     console.error('Error marking artifact as downloaded:', error);
     throw error;
@@ -257,8 +235,13 @@ export async function markArtifactDownloaded(
 /**
  * Complete level
  * 
- * Updates the user's progress to indicate a level has been completed
+ * Updates the user's progress in Firestore to indicate a level has been completed
  * and updates skill progress based on the level's focus areas
+ * 
+ * @param userId - The user ID
+ * @param levelId - The level ID that was completed
+ * @param level - The level data
+ * @throws Error if the update fails
  */
 export async function completeLevel(
   userId: string, 
@@ -266,7 +249,7 @@ export async function completeLevel(
   level: Level
 ): Promise<void> {
   try {
-    // Get current progress
+    // Get current progress to check if already completed
     const progress = await getUserProgress(userId);
     if (!progress) return;
     
@@ -279,34 +262,30 @@ export async function completeLevel(
     const currentLevelNumber = parseInt(levelId.split('-')[1]);
     const nextLevelId = `level-${currentLevelNumber + 1}`;
     
-    // Update completed levels
+    // Calculate updated skill progress from all completed levels plus this one
     const updatedCompletedLevels = [...progress.completedLevels, levelId];
-    
-    // Calculate skill progress from all completed levels
     const updatedSkillProgress = calculateSkillProgress(updatedCompletedLevels);
     
-    // Update progress
-    const updatedProgress = {
-      ...progress,
-      completedLevels: updatedCompletedLevels,
+    // Use a batch write for atomicity
+    const batch = writeBatch(db);
+    const userProgressRef = doc(db, 'userProgress', userId);
+    
+    // Prepare update data
+    const updateData = {
+      completedLevels: arrayUnion(levelId),
       currentLevel: nextLevelId,
       skillProgress: updatedSkillProgress,
-      lastUpdated: new Date().toISOString()
+      lastUpdated: serverTimestamp()
     };
     
-    // In a real app, we'd update Firestore:
-    // await updateDoc(doc(db, 'userProgress', userId), {
-    //   completedLevels: arrayUnion(levelId),
-    //   currentLevel: nextLevelId,
-    //   skillProgress: updatedSkillProgress,
-    //   lastUpdated: serverTimestamp()
-    // });
+    // Apply the update
+    batch.update(userProgressRef, updateData);
     
-    // For MVP, we'll use localStorage
-    localStorage.setItem(STORAGE_KEY + '_' + userId, JSON.stringify(updatedProgress));
+    // Commit the batch
+    await batch.commit();
     
-    // Check and award badges (implemented in a separate function)
-    await checkAndAwardBadges(userId);
+    // Check and award badges would go here in Task 6.6
+    // await checkAndAwardBadges(userId);
   } catch (error) {
     console.error('Error completing level:', error);
     throw error;
@@ -319,99 +298,22 @@ export async function completeLevel(
  * Examines the user's progress and awards any earned badges
  */
 export async function checkAndAwardBadges(userId: string): Promise<void> {
-  try {
-    // Get current progress
-    const progress = await getUserProgress(userId);
-    if (!progress) return;
-    
-    // Define badge criteria and check if they're met
-    const badgesToAward = [];
-    
-    // Example: First Level Completion Badge
-    if (
-      progress.completedLevels.length > 0 && 
-      !progress.badges.some(b => b.id === 'badge-first-level')
-    ) {
-      badgesToAward.push({
-        id: 'badge-first-level',
-        name: 'First Steps',
-        description: 'Completed your first level',
-        achieved: true,
-        achievedAt: new Date().toISOString()
-      });
-    }
-    
-    // Example: Halfway There Badge
-    if (
-      progress.completedLevels.length >= 5 && 
-      !progress.badges.some(b => b.id === 'badge-halfway')
-    ) {
-      badgesToAward.push({
-        id: 'badge-halfway',
-        name: 'Halfway There',
-        description: 'Completed 5 levels',
-        achieved: true,
-        achievedAt: new Date().toISOString()
-      });
-    }
-    
-    // Example: Resource Collector Badge
-    if (
-      progress.downloadedArtifacts.length >= 5 && 
-      !progress.badges.some(b => b.id === 'badge-collector')
-    ) {
-      badgesToAward.push({
-        id: 'badge-collector',
-        name: 'Resource Collector',
-        description: 'Downloaded 5 artifacts',
-        achieved: true,
-        achievedAt: new Date().toISOString()
-      });
-    }
-    
-    // If no badges to award, return early
-    if (badgesToAward.length === 0) {
-      return;
-    }
-    
-    // Update progress with new badges
-    const updatedProgress = {
-      ...progress,
-      badges: [...progress.badges, ...badgesToAward],
-      lastUpdated: new Date().toISOString()
-    };
-    
-    // In a real app, we'd update Firestore:
-    // for (const badge of badgesToAward) {
-    //   await updateDoc(doc(db, 'userProgress', userId), {
-    //     badges: arrayUnion(badge),
-    //     lastUpdated: serverTimestamp()
-    //   });
-    // }
-    
-    // For MVP, we'll use localStorage
-    localStorage.setItem(STORAGE_KEY + '_' + userId, JSON.stringify(updatedProgress));
-    
-    // In a real app, we might also send a notification about new badges
-    console.log('Badges awarded:', badgesToAward);
-  } catch (error) {
-    console.error('Error awarding badges:', error);
-    throw error;
-  }
+  // Implementation for Task 6.6
 }
 
 /**
  * Reset user progress (for testing)
  * 
- * Completely resets a user's progress
+ * Completely resets a user's progress in Firestore
+ * 
+ * @param userId - The user ID to reset progress for
+ * @throws Error if reset fails
  */
 export async function resetUserProgress(userId: string): Promise<void> {
   try {
-    // In a real app, we'd delete from Firestore:
-    // await deleteDoc(doc(db, 'userProgress', userId));
-    
-    // For MVP, we'll remove from localStorage
-    localStorage.removeItem(STORAGE_KEY + '_' + userId);
+    // Delete existing user progress document
+    const userProgressRef = doc(db, 'userProgress', userId);
+    await deleteDoc(userProgressRef);
     
     // Initialize fresh progress
     await initializeUserProgress(userId);

@@ -1,16 +1,17 @@
 /**
  * @file useLevels.ts
- * @description Hook for accessing level data and user progress
- * @dependencies lib/data/levels, hooks/useProgress
+ * @description Hook for accessing level data and user progress with React Query
+ * @dependencies lib/services/level-service, hooks/useProgress, @tanstack/react-query
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { Level, LevelStatus } from '@/types';
-import { getLevels, getLevelById } from '@/lib/data/levels';
+import { getLevels, getLevelById, getLevelStatus } from '@/lib/services/level-service';
 import { useProgress } from './useProgress';
+import { useQuery } from '@tanstack/react-query';
 
 /**
- * Hook for accessing and managing level data
+ * Hook for accessing and managing level data with React Query
  */
 export function useLevels() {
   const { 
@@ -19,68 +20,29 @@ export function useLevels() {
     isLevelCompleted 
   } = useProgress();
   
-  const [levels, setLevels] = useState<Level[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  // Fetch levels
-  useEffect(() => {
-    try {
-      // Get all levels
-      const allLevels = getLevels();
-      setLevels(allLevels);
-      
-      // If progress is still loading, we'll wait
-      if (!progressLoading) {
-        setLoading(false);
-      }
-    } catch (err) {
-      console.error('Error fetching levels:', err);
-      setError(err instanceof Error ? err : new Error('Failed to fetch levels'));
-      setLoading(false);
-    }
-  }, [progressLoading]);
-
-  // Update loading state when progress finishes loading
-  useEffect(() => {
-    if (!progressLoading && loading) {
-      setLoading(false);
-    }
-  }, [progressLoading, loading]);
+  // Query for fetching all levels
+  const { 
+    data: levels = [], 
+    isLoading: levelsLoading, 
+    error 
+  } = useQuery({
+    queryKey: ['levels'],
+    queryFn: getLevels,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
 
   /**
    * Get status for a specific level
    */
-  const getLevelStatus = useCallback((levelId: string): LevelStatus => {
+  const getStatus = useCallback((levelId: string): LevelStatus => {
     if (!progress) return LevelStatus.LOCKED;
     
-    // If level is completed, return completed status
-    if (isLevelCompleted(levelId)) {
-      return LevelStatus.COMPLETED;
-    }
-    
-    // If level is current level, it's available
-    if (progress.currentLevel === levelId) {
-      return LevelStatus.AVAILABLE;
-    }
-    
-    // Get the level
-    const level = getLevelById(levelId);
-    if (!level) return LevelStatus.LOCKED;
-    
-    // First level is always available
-    if (level.order === 1) {
-      return LevelStatus.AVAILABLE;
-    }
-    
-    // Check if previous level is completed
-    const previousLevelId = `level-${level.order - 1}`;
-    if (isLevelCompleted(previousLevelId)) {
-      return LevelStatus.AVAILABLE;
-    }
-    
-    return LevelStatus.LOCKED;
-  }, [progress, isLevelCompleted]);
+    return getLevelStatus(
+      levelId, 
+      progress.completedLevels, 
+      progress.currentLevel
+    );
+  }, [progress]);
 
   /**
    * Get all levels with their status
@@ -88,17 +50,34 @@ export function useLevels() {
   const getLevelsWithStatus = useCallback((): (Level & { status: LevelStatus })[] => {
     return levels.map(level => ({
       ...level,
-      status: getLevelStatus(level.id)
+      status: getStatus(level.id)
     }));
-  }, [levels, getLevelStatus]);
+  }, [levels, getStatus]);
+  
+  /**
+   * Get level by ID with its status
+   */
+  const getLevelWithStatus = useCallback((levelId: string) => {
+    const level = levels.find(level => level.id === levelId);
+    if (!level) return null;
+    
+    return {
+      ...level,
+      status: getStatus(levelId)
+    };
+  }, [levels, getStatus]);
+
+  // Combine loading states
+  const isLoading = levelsLoading || progressLoading;
 
   return {
     levels,
     progress,
-    loading: loading || progressLoading,
+    isLoading,
     error,
-    getLevelStatus,
+    getLevelStatus: getStatus,
     isLevelCompleted,
-    getLevelsWithStatus
+    getLevelsWithStatus,
+    getLevelWithStatus
   };
 } 

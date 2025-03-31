@@ -1,10 +1,10 @@
 /**
  * @file useProgress.ts
- * @description Hook for accessing and updating user progress
- * @dependencies lib/services/progress-service
+ * @description Hook for accessing and updating user progress with React Query
+ * @dependencies lib/services/progress-service, @tanstack/react-query
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useAuth } from './useAuth';
 import { UserProgress, SkillType, Badge } from '@/types';
 import { 
@@ -23,179 +23,141 @@ import {
   getSkillRecommendations,
   SkillInfo
 } from '@/lib/services/skill-service';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 /**
- * Hook for accessing and updating user progress
+ * Hook for accessing and updating user progress with React Query
  */
 export function useProgress() {
   const { user } = useAuth();
-  const [progress, setProgress] = useState<UserProgress | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-  const [isUpdating, setIsUpdating] = useState(false);
+  const queryClient = useQueryClient();
+  
+  // Query key for user progress
+  const progressQueryKey = user ? ['userProgress', user.id] : null;
+  
+  // Get user progress query
+  const { 
+    data: progress, 
+    isLoading, 
+    error,
+    refetch
+  } = useQuery({
+    queryKey: progressQueryKey,
+    queryFn: () => getUserProgress(user!.id),
+    enabled: !!user,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
 
-  // Load user progress
-  useEffect(() => {
-    async function loadProgress() {
-      if (!user) {
-        setProgress(null);
-        setIsLoading(false);
-        return;
+  // Mark video as watched mutation
+  const videoMutation = useMutation({
+    mutationFn: ({ videoId, position }: { videoId: string, position: number }) => 
+      markVideoWatched(user!.id, videoId, position),
+    onSuccess: () => {
+      // Invalidate the user progress query to trigger a refetch
+      if (progressQueryKey) {
+        queryClient.invalidateQueries({ queryKey: progressQueryKey });
       }
+    },
+  });
 
-      try {
-        const userProgress = await getUserProgress(user.id);
-        setProgress(userProgress);
-        setIsLoading(false);
-      } catch (err) {
-        console.error('Error loading progress:', err);
-        setError(err instanceof Error ? err : new Error('Failed to load progress'));
-        setIsLoading(false);
+  // Mark test as completed mutation
+  const testMutation = useMutation({
+    mutationFn: ({ 
+      testId, 
+      score, 
+      answers 
+    }: { 
+      testId: string, 
+      score: number, 
+      answers: Array<{ questionId: string; answeredOption: number; isCorrect: boolean }> 
+    }) => markTestCompleted(user!.id, testId, score, answers),
+    onSuccess: () => {
+      if (progressQueryKey) {
+        queryClient.invalidateQueries({ queryKey: progressQueryKey });
       }
-    }
+    },
+  });
 
-    loadProgress();
-  }, [user]);
+  // Mark artifact as downloaded mutation
+  const artifactMutation = useMutation({
+    mutationFn: (artifactId: string) => markArtifactDownloaded(user!.id, artifactId),
+    onSuccess: () => {
+      if (progressQueryKey) {
+        queryClient.invalidateQueries({ queryKey: progressQueryKey });
+      }
+    },
+  });
+
+  // Complete level mutation
+  const levelMutation = useMutation({
+    mutationFn: ({ levelId, levelData }: { levelId: string, levelData: any }) => 
+      completeLevel(user!.id, levelId, levelData),
+    onSuccess: () => {
+      if (progressQueryKey) {
+        queryClient.invalidateQueries({ queryKey: progressQueryKey });
+      }
+    },
+  });
+
+  // Reset progress mutation
+  const resetMutation = useMutation({
+    mutationFn: () => resetUserProgress(user!.id),
+    onSuccess: () => {
+      if (progressQueryKey) {
+        queryClient.invalidateQueries({ queryKey: progressQueryKey });
+      }
+    },
+  });
 
   /**
    * Track video as watched
    */
-  const trackVideoWatched = useCallback(async (videoId: string, position: number) => {
-    if (!user || !progress) return;
-    
-    try {
-      setIsUpdating(true);
-      await markVideoWatched(user.id, videoId, position);
-      
-      // Update local state
-      setProgress(prev => {
-        if (!prev) return prev;
-        
-        return {
-          ...prev,
-          watchedVideos: prev.watchedVideos.includes(videoId) 
-            ? prev.watchedVideos 
-            : [...prev.watchedVideos, videoId]
-        };
-      });
-      
-      setIsUpdating(false);
-    } catch (err) {
-      console.error('Error tracking video:', err);
-      setError(err instanceof Error ? err : new Error('Failed to track video'));
-      setIsUpdating(false);
-    }
-  }, [user, progress]);
+  const trackVideoWatched = useCallback((videoId: string, position: number) => {
+    if (!user) return;
+    videoMutation.mutate({ videoId, position });
+  }, [user, videoMutation]);
 
   /**
    * Track test as completed
    */
-  const trackTestCompleted = useCallback(async (
+  const trackTestCompleted = useCallback((
     testId: string, 
     score: number, 
     answers: Array<{ questionId: string; answeredOption: number; isCorrect: boolean }>
   ) => {
-    if (!user || !progress) return;
-    
-    try {
-      setIsUpdating(true);
-      await markTestCompleted(user.id, testId, score, answers);
-      
-      // Update local state
-      setProgress(prev => {
-        if (!prev) return prev;
-        
-        return {
-          ...prev,
-          completedTests: prev.completedTests.includes(testId) 
-            ? prev.completedTests 
-            : [...prev.completedTests, testId]
-        };
-      });
-      
-      setIsUpdating(false);
-    } catch (err) {
-      console.error('Error tracking test:', err);
-      setError(err instanceof Error ? err : new Error('Failed to track test'));
-      setIsUpdating(false);
-    }
-  }, [user, progress]);
+    if (!user) return;
+    testMutation.mutate({ testId, score, answers });
+  }, [user, testMutation]);
 
   /**
    * Track artifact as downloaded
    */
-  const trackArtifactDownloaded = useCallback(async (artifactId: string) => {
-    if (!user || !progress) return;
-    
-    try {
-      setIsUpdating(true);
-      await markArtifactDownloaded(user.id, artifactId);
-      
-      // Update local state
-      setProgress(prev => {
-        if (!prev) return prev;
-        
-        return {
-          ...prev,
-          downloadedArtifacts: prev.downloadedArtifacts.includes(artifactId) 
-            ? prev.downloadedArtifacts 
-            : [...prev.downloadedArtifacts, artifactId]
-        };
-      });
-      
-      setIsUpdating(false);
-    } catch (err) {
-      console.error('Error tracking artifact:', err);
-      setError(err instanceof Error ? err : new Error('Failed to track artifact'));
-      setIsUpdating(false);
-    }
-  }, [user, progress]);
+  const trackArtifactDownloaded = useCallback((artifactId: string) => {
+    if (!user) return;
+    artifactMutation.mutate(artifactId);
+  }, [user, artifactMutation]);
 
   /**
    * Track level as completed
    */
   const trackLevelCompleted = useCallback(async (levelId: string, levelData: any) => {
-    if (!user || !progress) return;
-    
+    if (!user) return false;
     try {
-      setIsUpdating(true);
-      await completeLevel(user.id, levelId, levelData);
-      
-      // Reload progress to get updated skills and badges
-      const updatedProgress = await getUserProgress(user.id);
-      setProgress(updatedProgress);
-      
-      setIsUpdating(false);
+      await levelMutation.mutateAsync({ levelId, levelData });
       return true;
-    } catch (err) {
-      console.error('Error completing level:', err);
-      setError(err instanceof Error ? err : new Error('Failed to complete level'));
-      setIsUpdating(false);
+    } catch (error) {
+      console.error('Error completing level:', error);
       return false;
     }
-  }, [user, progress]);
+  }, [user, levelMutation]);
 
   /**
    * Reset user's progress (for testing)
    */
-  const resetProgress = useCallback(async () => {
+  const resetProgress = useCallback(() => {
     if (!user) return;
-    
-    try {
-      setIsUpdating(true);
-      await resetUserProgress(user.id);
-      
-      // Reload progress
-      const freshProgress = await getUserProgress(user.id);
-      setProgress(freshProgress);
-      
-      setIsUpdating(false);
-    } catch (err) {
-      console.error('Error resetting progress:', err);
-      setError(err instanceof Error ? err : new Error('Failed to reset progress'));
-      setIsUpdating(false);
-    }
-  }, [user]);
+    resetMutation.mutate();
+  }, [user, resetMutation]);
 
   /**
    * Check if a video is watched
@@ -275,6 +237,14 @@ export function useProgress() {
     );
   }, [progress]);
 
+  // Calculate the overall updating state
+  const isUpdating = 
+    videoMutation.isPending || 
+    testMutation.isPending || 
+    artifactMutation.isPending || 
+    levelMutation.isPending || 
+    resetMutation.isPending;
+
   return {
     progress,
     isLoading,
@@ -295,6 +265,7 @@ export function useProgress() {
     getTopSkills,
     getSkillRecommendationsForUser,
     getSkillsInfo,
-    getSkillInfo
+    getSkillInfo,
+    refetchProgress: refetch
   };
 } 

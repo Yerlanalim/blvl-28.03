@@ -18,10 +18,10 @@ import { LevelStatus } from '@/types';
  * Displays the gamified level map with all levels and connections
  */
 export function LevelMap() {
-  const { getLevelsWithStatus, loading, error } = useLevels();
+  const { getLevelsWithStatus, isLoading, error } = useLevels();
 
   // Show loading state
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-teal-500"></div>
@@ -41,16 +41,31 @@ export function LevelMap() {
   // Get levels with status
   const levels = getLevelsWithStatus();
 
+  // Ensure levels are loaded to prevent rendering errors
+  if (!levels || levels.length === 0) {
+    return (
+      <div className="text-amber-500 p-4 border border-amber-200 rounded-lg">
+        No levels found. Please check your data.
+      </div>
+    );
+  }
+
   // Helper to get connection status
   const getConnectionStatus = (levelIndex: number): LevelStatus => {
     if (levelIndex <= 0) return LevelStatus.AVAILABLE;
     
     const previousLevel = levels[levelIndex - 1];
-    if (previousLevel.status === LevelStatus.COMPLETED) {
+    if (previousLevel?.status === LevelStatus.COMPLETED) {
       return LevelStatus.COMPLETED;
     }
     
     return LevelStatus.LOCKED;
+  };
+
+  // Helper to render a level card safely
+  const renderLevelCard = (index: number) => {
+    if (!levels[index]) return null;
+    return <LevelCard level={levels[index]} status={levels[index].status} />;
   };
 
   return (
@@ -60,13 +75,13 @@ export function LevelMap() {
       <div className="grid grid-cols-3 gap-6">
         {/* Row 1: Levels 1-3 */}
         <div className="col-span-1">
-          <LevelCard level={levels[0]} status={levels[0].status} />
+          {renderLevelCard(0)}
         </div>
         <div className="col-span-1 flex items-center">
           <LevelConnection direction="horizontal" status={getConnectionStatus(1)} />
         </div>
         <div className="col-span-1">
-          <LevelCard level={levels[1]} status={levels[1].status} />
+          {renderLevelCard(1)}
         </div>
         
         {/* Connector to Level 3 */}
@@ -78,7 +93,7 @@ export function LevelMap() {
         <div className="col-span-1"></div>
         <div className="col-span-1"></div>
         <div className="col-span-1">
-          <LevelCard level={levels[2]} status={levels[2].status} />
+          {renderLevelCard(2)}
         </div>
         
         {/* Connector to Level 4 */}
@@ -90,7 +105,7 @@ export function LevelMap() {
         {/* Row 3: Level 4 */}
         <div className="col-span-1"></div>
         <div className="col-span-1">
-          <LevelCard level={levels[3]} status={levels[3].status} />
+          {renderLevelCard(3)}
         </div>
         <div className="col-span-1"></div>
         
@@ -102,7 +117,7 @@ export function LevelMap() {
         {/* Row 4: Level 5 */}
         <div className="col-span-1"></div>
         <div className="col-span-1">
-          <LevelCard level={levels[4]} status={levels[4].status} />
+          {renderLevelCard(4)}
         </div>
         <div className="col-span-1"></div>
         
@@ -114,7 +129,7 @@ export function LevelMap() {
         
         {/* Row 5: Level 6 */}
         <div className="col-span-1">
-          <LevelCard level={levels[5]} status={levels[5].status} />
+          {renderLevelCard(5)}
         </div>
         <div className="col-span-1"></div>
         <div className="col-span-1"></div>
@@ -126,13 +141,13 @@ export function LevelMap() {
         
         {/* Row 6: Level 7 */}
         <div className="col-span-1">
-          <LevelCard level={levels[6]} status={levels[6].status} />
+          {renderLevelCard(6)}
         </div>
         <div className="col-span-1 flex items-center">
           <LevelConnection direction="horizontal" status={getConnectionStatus(7)} />
         </div>
         <div className="col-span-1">
-          <LevelCard level={levels[7]} status={levels[7].status} />
+          {renderLevelCard(7)}
         </div>
         
         {/* Connector to Level 9 */}
@@ -144,7 +159,7 @@ export function LevelMap() {
         <div className="col-span-1"></div>
         <div className="col-span-1"></div>
         <div className="col-span-1">
-          <LevelCard level={levels[8]} status={levels[8].status} />
+          {renderLevelCard(8)}
         </div>
         
         {/* Connector to Level 10 */}
@@ -155,7 +170,7 @@ export function LevelMap() {
         {/* Row 8: Level 10 */}
         <div className="col-span-1"></div>
         <div className="col-span-1">
-          <LevelCard level={levels[9]} status={levels[9].status} />
+          {renderLevelCard(9)}
         </div>
         <div className="col-span-1"></div>
       </div>
